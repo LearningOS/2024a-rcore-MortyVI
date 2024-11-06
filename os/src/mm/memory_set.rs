@@ -35,7 +35,8 @@ lazy_static! {
 }
 /// address space
 pub struct MemorySet {
-    page_table: PageTable,
+    /// page table
+    pub page_table: PageTable,
     areas: Vec<MapArea>,
 }
 
@@ -261,6 +262,59 @@ impl MemorySet {
         } else {
             false
         }
+    }
+
+    fn check_vpn_range(&self, sva: &VirtAddr, eva: &VirtAddr) -> bool {
+
+        for area in self.areas.iter() {
+            if area.vpn_range.get_end().0 > sva.floor().0 && eva.ceil().0 > area.vpn_range.get_start().0 {
+                return false;
+            }
+        }
+        true
+    }
+    
+    /// mmap
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> bool {
+        // [sva, eva]
+        let sva = VirtAddr::from(start);
+        let eva = VirtAddr::from(start + len);
+        if !self.check_vpn_range(&sva, &eva) {
+            return false;
+        }
+        let mut map_perm = MapPermission::U;
+        if (port & 1) != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if (port & 2) != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if (port & 4) != 0 {
+            map_perm |= MapPermission::X;
+        }
+        self.insert_framed_area(sva, eva, map_perm);
+        true
+    }
+
+    /// .
+    pub fn munmap(&mut self, start: usize, len: usize) -> bool {
+        let sva = VirtAddr::from(start);
+        if !sva.aligned() {
+            return false;
+        }
+        let eva = VirtAddr::from(start + len);
+        let mut index = self.areas.len();
+        for (i, area) in self.areas.iter().enumerate() {
+            if area.vpn_range.get_start().0 == sva.floor().0 && area.vpn_range.get_end().0 == eva.ceil().0 {
+                index = i;
+            }
+        }
+        if index == self.areas.len() {
+            return false;
+        }
+        self.areas[index].unmap(&mut self.page_table);
+        self.areas.remove(index);
+        true
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory

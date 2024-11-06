@@ -1,6 +1,6 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, PhysAddr};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -147,6 +147,24 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+    /// identical map
+    pub fn identical_map(&mut self, _pa: usize) {
+        let pa = PhysAddr::from(_pa);
+        let va = VirtAddr::from(_pa);
+        let ppn = pa.floor();
+        let vpn = va.floor();
+        let pte = self.find_pte_create(vpn).unwrap();
+        *pte = PageTableEntry::new(ppn, PTEFlags::R | PTEFlags::W | PTEFlags::V);
+    }
+    /// identical unmap
+    pub fn identical_unmap(&mut self, _va: usize) {
+        let va = VirtAddr::from(_va);
+        let vpn = va.floor();
+        if let Some(pte) = self.find_pte(vpn) {
+            *pte = PageTableEntry::empty();
+        }
+    }
+
 }
 
 /// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table
