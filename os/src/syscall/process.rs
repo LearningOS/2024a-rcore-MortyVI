@@ -4,11 +4,12 @@ use alloc::sync::Arc;
 use crate::{
     config::MAX_SYSCALL_NUM,
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, copy_bytes_to_use_space},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
     },
+    timer::{get_time_us, get_time_ms}
 };
 
 #[repr(C)]
@@ -118,40 +119,43 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let us = get_time_us();
+    let size = core::mem::size_of::<TimeVal>();
+    let tv = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    let bytes = unsafe {core::slice::from_raw_parts(&tv as *const TimeVal as *const u8, size)};
+    copy_bytes_to_use_space(current_user_token(), bytes, _ts as usize);
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let task = current_task().unwrap();
+    let size = core::mem::size_of::<TaskInfo>();
+    let task_info = TaskInfo {
+        status: TaskStatus::Running,
+        time: get_time_ms() - task.get_start_time(),
+        syscall_times: task.get_syscall_times()
+    };
+    let bytes = unsafe {core::slice::from_raw_parts(&task_info as *const TaskInfo as *const u8, size)};
+    copy_bytes_to_use_space(current_user_token(), bytes, _ti as usize);
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let task = current_task().unwrap();
+    task.mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let task = current_task().unwrap();
+    task.munmap(_start, _len)
 }
 
 /// change data segment size
@@ -182,3 +186,4 @@ pub fn sys_set_priority(_prio: isize) -> isize {
     );
     -1
 }
+

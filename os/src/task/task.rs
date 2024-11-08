@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
@@ -68,6 +68,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    // start time
+    pub start_time: usize,
+
+    // syscall times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +124,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM]
                 })
             },
         };
@@ -191,6 +199,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM]
                 })
             },
         });
@@ -235,6 +245,30 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// get start time
+    pub fn get_start_time(&self) -> usize{
+        self.inner.exclusive_access().start_time.clone()
+    }
+
+    /// get syscall times
+    pub fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        self.inner.exclusive_access().syscall_times.clone()
+    }
+
+    /// count syscall times
+    pub fn count_syscall_times(&self, syscall_id: usize) {
+        self.inner.exclusive_access().syscall_times[syscall_id] += 1;
+    }
+
+    /// mmap
+    pub fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        self.inner.exclusive_access().memory_set.mmap(start, len, port)
+    }
+
+    /// munmap
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        self.inner.exclusive_access().memory_set.munmap(start, len)
     }
 }
 
