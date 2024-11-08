@@ -216,6 +216,15 @@ impl TaskControlBlock {
         // ---- release parent PCB
     }
 
+    /// spawn
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let task_control_block = Arc::new(Self::new(elf_data));
+        task_control_block.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        self.inner_exclusive_access().children.push(task_control_block.clone());
+        task_control_block
+    }
+    
+
     /// get pid of process
     pub fn getpid(&self) -> usize {
         self.pid.0
