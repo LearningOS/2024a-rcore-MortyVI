@@ -1,13 +1,14 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM};
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM, BIG_STRIDE};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::cmp::Ordering;
 
 /// Task control block structure
 ///
@@ -34,6 +35,50 @@ impl TaskControlBlock {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
     }
+}
+
+/// stride
+#[derive(Clone, Copy)]
+pub struct Stride(u64);
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let a = self.inner_exclusive_access().stride.0;
+        let b = other.inner_exclusive_access().stride.0;
+        let max = a.max(b);
+        let min = a.min(b);
+        if max - min <= BIG_STRIDE / 2 {
+            if max == a {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        } else {
+            if min == a {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        }
+
+    }
+}
+
+#[allow(unused_variables)]
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        false
+    }
+}
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl Eq for TaskControlBlock {
+    
 }
 
 pub struct TaskControlBlockInner {
@@ -74,6 +119,12 @@ pub struct TaskControlBlockInner {
 
     // syscall times
     pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// schedule priority
+    pub priority: isize,
+
+    /// stride
+    pub stride: Stride
 }
 
 impl TaskControlBlockInner {
@@ -125,7 +176,9 @@ impl TaskControlBlock {
                     heap_bottom: user_sp,
                     program_brk: user_sp,
                     start_time: 0,
-                    syscall_times: [0; MAX_SYSCALL_NUM]
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: 16,
+                    stride: Stride(0)
                 })
             },
         };
@@ -200,7 +253,9 @@ impl TaskControlBlock {
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
                     start_time: 0,
-                    syscall_times: [0; MAX_SYSCALL_NUM]
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: 16,
+                    stride: Stride(0)
                 })
             },
         });
@@ -224,10 +279,42 @@ impl TaskControlBlock {
         task_control_block
     }
     
-
     /// get pid of process
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+
+    /// set priority
+    pub fn set_priority(&self, priority: isize) -> isize {
+        if priority < 2 {
+            return -1;
+        }
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = priority;
+        priority
+    }
+
+    /// get priority
+    pub fn get_priority(&self) -> isize {
+        let inner = self.inner_exclusive_access();
+        inner.priority
+    }
+
+    /// get stride
+    pub fn get_stride(&self) -> Stride {
+        let inner = self.inner_exclusive_access();
+        inner.stride
+    }
+
+    /// add stride
+    pub fn add_stride(&self) {
+        let mut inner = self.inner_exclusive_access();
+        let pass = BIG_STRIDE / (inner.priority as u64);
+        if inner.stride.0 + pass >= BIG_STRIDE {
+            inner.stride.0 = inner.stride.0 + pass - BIG_STRIDE;
+        } else {
+            inner.stride.0 = inner.stride.0 + pass;
+        }
     }
 
     /// change the location of the program break. return None if failed.
