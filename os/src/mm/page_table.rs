@@ -280,9 +280,10 @@ impl Iterator for UserBufferIterator {
 /// copy bytes to use space
 pub fn copy_bytes_to_use_space(token:usize, bytes: &[u8], va: usize) {
     let mut va = va;
+    let page_table = PageTable::from_token(token);
     for byte in bytes {
         let vpn = VirtPageNum::from(VirtAddr::from(va));
-        let pte = PageTable::from_token(token).translate(vpn).unwrap();
+        let pte = page_table.translate(vpn).unwrap();
         let ppn = pte.ppn();
         let pa = (ppn.0 << 12) | (va & 0xfff);
         unsafe {
