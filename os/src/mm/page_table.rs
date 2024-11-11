@@ -276,3 +276,18 @@ impl Iterator for UserBufferIterator {
         }
     }
 }
+
+/// copy bytes to use space
+pub fn copy_bytes_to_use_space(token:usize, bytes: &[u8], va: usize) {
+    let mut va = va;
+    for byte in bytes {
+        let vpn = VirtPageNum::from(VirtAddr::from(va));
+        let pte = PageTable::from_token(token).translate(vpn).unwrap();
+        let ppn = pte.ppn();
+        let pa = (ppn.0 << 12) | (va & 0xfff);
+        unsafe {
+            *(pa as *mut u8) = byte.clone();
+        }
+        va += 1;
+    }
+}

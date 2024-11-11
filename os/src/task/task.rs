@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM, BIG_STRIDE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -10,6 +10,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::cmp::Ordering;
 
 /// Task control block structure
 ///
@@ -36,6 +37,50 @@ impl TaskControlBlock {
         let inner = self.inner_exclusive_access();
         inner.memory_set.token()
     }
+}
+
+/// stride
+#[derive(Clone, Copy)]
+pub struct Stride(u64);
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let a = self.inner_exclusive_access().stride.0;
+        let b = other.inner_exclusive_access().stride.0;
+        let max = a.max(b);
+        let min = a.min(b);
+        if max - min <= BIG_STRIDE / 2 {
+            if max == a {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        } else {
+            if min == a {
+                Some(Ordering::Greater)
+            } else {
+                Some(Ordering::Less)
+            }
+        }
+
+    }
+}
+
+#[allow(unused_variables)]
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        false
+    }
+}
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl Eq for TaskControlBlock {
+
 }
 
 pub struct TaskControlBlockInner {
@@ -71,6 +116,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+     // start time
+     pub start_time: usize,
+
+     // syscall times
+     pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+     /// schedule priority
+    pub priority: isize,
+
+    /// stride
+    pub stride: Stride
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +192,10 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: 16,
+                    stride: Stride(0)
                 })
             },
         };
@@ -216,6 +277,10 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: 16,
+                    stride: Stride(0)
                 })
             },
         });
@@ -231,9 +296,50 @@ impl TaskControlBlock {
         // ---- release parent PCB
     }
 
+    /// spawn
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let task_control_block = Arc::new(Self::new(elf_data));
+        task_control_block.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        self.inner_exclusive_access().children.push(task_control_block.clone());
+        task_control_block
+    }
+
     /// get pid of process
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+
+    /// set priority
+    pub fn set_priority(&self, priority: isize) -> isize {
+        if priority < 2 {
+            return -1;
+        }
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = priority;
+        priority
+    }
+
+    /// get priority
+    pub fn get_priority(&self) -> isize {
+        let inner = self.inner_exclusive_access();
+        inner.priority
+    }
+
+    /// get stride
+    pub fn get_stride(&self) -> Stride {
+        let inner = self.inner_exclusive_access();
+        inner.stride
+    }
+
+    /// add stride
+    pub fn add_stride(&self) {
+        let mut inner = self.inner_exclusive_access();
+        let pass = BIG_STRIDE / (inner.priority as u64);
+        if inner.stride.0 + pass >= BIG_STRIDE {
+            inner.stride.0 = inner.stride.0 + pass - BIG_STRIDE;
+        } else {
+            inner.stride.0 = inner.stride.0 + pass;
+        }
     }
 
     /// change the location of the program break. return None if failed.
@@ -260,6 +366,31 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// get start time
+    pub fn get_start_time(&self) -> usize{
+        self.inner.exclusive_access().start_time.clone()
+    }
+
+    /// get syscall times
+    pub fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        self.inner.exclusive_access().syscall_times.clone()
+    }
+
+    /// count syscall times
+    pub fn count_syscall_times(&self, syscall_id: usize) {
+        self.inner.exclusive_access().syscall_times[syscall_id] += 1;
+    }
+
+    /// mmap
+    pub fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        self.inner.exclusive_access().memory_set.mmap(start, len, port)
+    }
+    
+    /// munmap
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        self.inner.exclusive_access().memory_set.munmap(start, len)
     }
 }
 
